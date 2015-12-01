@@ -30,13 +30,13 @@ jsons <- lapply(files, function(filename) {
                 name <- paste0(split[2], "_", split[1])
                 indirect <- table[, .(
                     openBid = 1 / openAsk,
-                    lowBid = 1 / lowAsk,
+                    lowBid = 1 / highAsk,
                     closeBid = 1 / closeAsk,
-                    highBid = 1 / highAsk,
+                    highBid = 1 / lowAsk,
                     openAsk = 1 / openBid,
-                    lowAsk = 1 / lowBid,
+                    lowAsk = 1 / highBid,
                     closeAsk = 1 / closeBid,
-                    highAsk = 1 / highBid,
+                    highAsk = 1 / lowBid,
                     name = name,
                     time = as.POSIXct(time,
                         format="%Y-%m-%dT%H:%M:%OSZ",

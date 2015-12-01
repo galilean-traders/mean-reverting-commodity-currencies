@@ -13,5 +13,5 @@ make -j4 -B
 
 # plot the time series
 ```bash
-./dt2plot.R --input time_series.rds
+./dt2plot.R time_series.rds
 ```
