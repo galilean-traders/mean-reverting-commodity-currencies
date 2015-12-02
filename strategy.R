@@ -4,6 +4,20 @@ library(data.table)
 library(reshape2)
 library(argparse)
 library(TTR)
+library(ggplot2)
+
+theme_set(theme_bw(base_size=12) + theme(
+    legend.key.size=unit(1, 'lines'),
+    text=element_text(face='plain', family='CM Roman'),
+    legend.title=element_text(face='plain'),
+    axis.line=element_line(color='black'),
+    axis.title.y=element_text(vjust=0.1),
+    axis.title.x=element_text(vjust=0.1),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.key = element_blank(),
+    panel.border = element_blank()
+))
 
 argument.parser <- ArgumentParser(description="perform the johansen test")
 argument.parser$add_argument(
@@ -34,21 +48,50 @@ portfolio <- portfolio.prices[complete.cases(portfolio.prices),
     units := (portfolio_bid - runMean(portfolio_bid, lookback)) / runSD(portfolio_bid, lookback)
     ]
 
-portfolio <- portfolio[complete.cases(portfolio)][, ..I := .I]
+portfolio <- portfolio[complete.cases(portfolio)]
 
-portfolio$position <- c(NA, diff(portfolio$units))
+portfolio$trade <- c(portfolio[1, units], diff(portfolio$units))
 
-calculate.pnl <- function(position, portfolio_bid, portfolio_ask) {
-    if (position > 0) {
-        return(position * portfolio_ask)
+calculate.cost <- function(trade, bid, ask) {
+    if (trade > 0) {
+        value <- -trade * ask
     }
     else {
-        return(-position * portfolio_bid)
+        value <- -trade * bid
     }
+    return(value)
 }
 
-portfolio <- portfolio[complete.cases(portfolio),
-    pnl := calculate.pnl(position, portfolio_bid, portfolio_ask),
-    by=..I]
+portfolio[,
+    cost := calculate.cost(trade, portfolio_bid, portfolio_ask),
+    by=time]
+
+portfolio[,
+    account := cumsum(cost)
+    ]
+
+calculate.value = function(units, bid, ask) {
+        if (units > 0) {
+            return(units * bid)
+        }
+        else {
+            return(units * ask)
+        }
+    }
+
+portfolio[,
+    value := calculate.value(units, portfolio_bid, portfolio_ask), by=time]
+
+portfolio[, equity := value + account]
 
 print(portfolio)
+
+plot <- ggplot(portfolio, aes(x=time, y=equity)) + geom_line()
+
+width = 10
+factor = 0.618
+height = width * factor
+X11(width=width, height=height)
+print(plot)
+warnings()
+invisible(readLines(con="stdin", 1))
