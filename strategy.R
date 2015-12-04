@@ -1,7 +1,6 @@
 #!/usr/bin/env Rscript
 
 library(data.table)
-library(reshape2)
 library(argparse)
 library(TTR)
 library(ggplot2)
@@ -19,76 +18,99 @@ theme_set(theme_bw(base_size=12) + theme(
     panel.border = element_blank()
 ))
 
-argument.parser <- ArgumentParser(description="perform the johansen test")
+argument.parser <- ArgumentParser(description="simulate the strategy")
 argument.parser$add_argument(
-    "input",
+    "--time_series",
     nargs="?",
     default="time_series.rds",
-    help="input rds file")
+    help="input rds file"
+)
+argument.parser$add_argument(
+    "--johansen",
+    nargs="?",
+    default="johansen.rds",
+    help="input rds file"
+)
 
 args <- argument.parser$parse_args()
-dt <- readRDS(args$input)
+dt <- readRDS(args$time_series)
+johansen <- readRDS(args$johansen)
+lookback <- round(log(2) / johansen$lambda)
 
-to.test <- data.table(dcast(dt, time ~ name, value.var="closeBid"))[,
-                                                                    .(time, aud_eur, cad_eur)]
-to.test2 <- data.table(dcast(dt, time ~ name, value.var="closeAsk"))[,
-                                                                     .(time, aud_eur, cad_eur)]
+to.test <- dcast(dt,
+          time ~ name,
+          value.var=c("closeBid", "closeAsk", "openBid", "openAsk")
+          )
 
-merged <- merge(to.test, to.test2, by="time", suffixes=c("_bid", "_ask"))
-
-portfolio.prices <- merged[, `:=`(
-                                  portfolio_bid = aud_eur_bid - 2.28 * cad_eur_ask,
-                                  portfolio_ask = aud_eur_ask - 2.28 * cad_eur_bid
-                                  )
-]
-
-lookback <- 11428
-
-portfolio <- portfolio.prices[complete.cases(portfolio.prices),
-    units := (portfolio_bid - runMean(portfolio_bid, lookback)) / runSD(portfolio_bid, lookback)
-    ]
-
-portfolio <- portfolio[complete.cases(portfolio)]
-
-portfolio$trade <- c(portfolio[1, units], diff(portfolio$units))
-
-calculate.cost <- function(trade, bid, ask) {
-    if (trade > 0) {
-        value <- -trade * ask
-    }
-    else {
-        value <- -trade * bid
-    }
-    return(value)
-}
-
-portfolio[,
-    cost := calculate.cost(trade, portfolio_bid, portfolio_ask),
-    by=time]
-
-portfolio[,
-    account := cumsum(cost)
-    ]
-
-calculate.value = function(units, bid, ask) {
-        if (units > 0) {
-            return(units * bid)
+column.names <- function(eigenvector, prefix, positive, negative) {
+    names <- names(eigenvector)
+    return(sapply(names, function(name) {
+        value <- eigenvector[name]
+        currency <- gsub(".l2", "", name)
+        if (value > 0) {
+            return(paste0(prefix, positive, "_", currency))
         }
         else {
-            return(units * ask)
+            return(paste0(prefix, negative, "_", currency))
         }
-    }
+    }))
+}
 
-portfolio[,
-    value := calculate.value(units, portfolio_bid, portfolio_ask), by=time]
+eigenvector <- head(johansen$v, -1)
+close_ask.names <- column.names(eigenvector, "close", "Ask", "Bid")
+close_bid.names <- column.names(eigenvector, "close", "Bid", "Ask")
+open_ask.names <- column.names(eigenvector, "open", "Ask", "Bid")
+open_bid.names <- column.names(eigenvector, "open", "Bid", "Ask")
 
-portfolio[, equity := value + account]
+to.test[, portfolio_close_ask := as.matrix(.SD) %*% eigenvector,
+        .SDcols=close_ask.names]
+to.test[, portfolio_close_bid := as.matrix(.SD) %*% eigenvector,
+        .SDcols=close_bid.names]
+to.test[, portfolio_open_ask := as.matrix(.SD) %*% eigenvector,
+        .SDcols=open_ask.names]
+to.test[, portfolio_open_bid := as.matrix(.SD) %*% eigenvector,
+        .SDcols=open_bid.names]
+
+to.test[complete.cases(to.test),
+    score := (portfolio_close_bid - runMean(portfolio_close_bid, lookback))
+    / runSD(portfolio_close_bid, lookback)
+    ]
+
+entry.score <- 1
+exit.score <- -0.9
+
+trades <- to.test[,
+    list(
+    time=time,
+    long.entry=(score > entry.score & shift(score) < entry.score),
+    long.exit=(score < exit.score & shift(score) > exit.score),
+    short.entry=(score < -entry.score & shift(score) > -entry.score),
+    short.exit=(score > exit.score & shift(score) < exit.score)
+    )
+    ]
+
+portfolio <- merge(to.test, trades, by="time")
+
+portfolio[, trades := (
+            - long.entry * shift(portfolio_open_ask, type="lead")
+            + long.exit * shift(portfolio_open_bid, type="lead")
+            - short.exit * shift(portfolio_open_ask, type="lead")
+            + short.entry * shift(portfolio_open_bid, type="lead")
+            )
+]
+portfolio[complete.cases(portfolio),
+          position := (long.entry - short.entry + short.exit - long.exit)]
+
+portfolio[
+    complete.cases(portfolio),
+    p.and.l := cumsum(trades)
+        ]
 
 print(portfolio)
 
-plot <- ggplot(portfolio, aes(x=time, y=equity)) + geom_line()
+plot <- ggplot(portfolio, aes(x=time, y=score)) + geom_line()
 
-width = 10
+width = 15
 factor = 0.618
 height = width * factor
 X11(width=width, height=height)
